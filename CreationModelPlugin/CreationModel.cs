@@ -1,5 +1,6 @@
 ﻿using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
+using Autodesk.Revit.DB.Structure;
 using Autodesk.Revit.UI;
 using System;
 using System.Collections.Generic;
@@ -17,14 +18,45 @@ namespace CreationModelPlugin
             Document doc = commandData.Application.ActiveUIDocument.Document;
 
             Level level1, level2;
-
             GetLevels(doc, out level1, out level2);
-            CreateWalls(doc, level1, level2);
-
+            List<Wall> walls = CreateWalls(doc, level1, level2);
+            AddDoors(doc, level1, walls[0]);
+            List<FamilyInstance> windows = AddWindows(doc, level1, walls);
             return Result.Succeeded;
         }
 
-        private static void CreateWalls(Document doc, Level level1, Level level2, double widthSet=10000, double depthSet=5000)
+        private static List<FamilyInstance> AddWindows(Document doc, Level level1, List<Wall> walls)
+        {
+            FamilySymbol windowType = new FilteredElementCollector(doc)
+                .OfClass(typeof(FamilySymbol))
+                .OfCategory(BuiltInCategory.OST_Windows)
+                .OfType<FamilySymbol>()
+                .Where(x => x.Name.Equals("0915 x 1830 мм"))
+                .Where(x => x.FamilyName.Equals("Фиксированные"))
+                .FirstOrDefault();
+            List<FamilyInstance> windows = new List<FamilyInstance>();
+            Transaction transaction = new Transaction(doc, "Построение окон");
+            transaction.Start();
+            for (int i = 1; i < walls.Count; i++)
+            {
+                Wall wall = walls[i];
+                LocationCurve hostCurve = wall.Location as LocationCurve;
+                XYZ point1 = hostCurve.Curve.GetEndPoint(0);
+                XYZ point2 = hostCurve.Curve.GetEndPoint(1);
+                XYZ point = (point1 + point2) / 2;
+
+                if (!windowType.IsActive)
+                    windowType.Activate();
+                FamilyInstance window = doc.Create.NewFamilyInstance(point, windowType, wall, level1, StructuralType.NonStructural);
+                windows.Add(window);
+                window.get_Parameter(BuiltInParameter.INSTANCE_SILL_HEIGHT_PARAM).Set(UnitUtils.ConvertToInternalUnits(915, UnitTypeId.Millimeters));
+            }
+            transaction.Commit();
+
+            return windows;
+        }
+
+        private static List<Wall> CreateWalls(Document doc, Level level1, Level level2, double widthSet = 10000, double depthSet = 5000)
         {
             double width = UnitUtils.ConvertToInternalUnits(widthSet, UnitTypeId.Millimeters);
             double depth = UnitUtils.ConvertToInternalUnits(depthSet, UnitTypeId.Millimeters);
@@ -49,6 +81,29 @@ namespace CreationModelPlugin
                 walls.Add(wall);
                 wall.get_Parameter(BuiltInParameter.WALL_HEIGHT_TYPE).Set(level2.Id);
             }
+            transaction.Commit();
+            return walls;
+        }
+
+        private static void AddDoors(Document doc, Level level1, Wall wall)
+        {
+            FamilySymbol doorType = new FilteredElementCollector(doc)
+                .OfClass(typeof(FamilySymbol))
+                .OfCategory(BuiltInCategory.OST_Doors)
+                .OfType<FamilySymbol>()
+                .Where(x => x.Name.Equals("0915 x 2134 мм"))
+                .Where(x => x.FamilyName.Equals("Одиночные-Щитовые"))
+                .FirstOrDefault();
+
+            LocationCurve hostCurve = wall.Location as LocationCurve;
+            XYZ point1 = hostCurve.Curve.GetEndPoint(0);
+            XYZ point2 = hostCurve.Curve.GetEndPoint(1);
+            XYZ point = (point1 + point2) / 2;
+            Transaction transaction = new Transaction(doc, "Построение дверей");
+            transaction.Start();
+            if (!doorType.IsActive)
+                doorType.Activate();
+            doc.Create.NewFamilyInstance(point, doorType, wall, level1, StructuralType.NonStructural);
             transaction.Commit();
         }
 
