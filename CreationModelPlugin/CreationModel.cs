@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using Autodesk.Revit.ApplicationServices;
 
 namespace CreationModelPlugin
 {
@@ -19,10 +20,66 @@ namespace CreationModelPlugin
 
             Level level1, level2;
             GetLevels(doc, out level1, out level2);
+
             List<Wall> walls = CreateWalls(doc, level1, level2);
+
             AddDoors(doc, level1, walls[0]);
             List<FamilyInstance> windows = AddWindows(doc, level1, walls);
+            AddRoof(doc, level2, walls);
+
             return Result.Succeeded;
+        }
+
+        private void AddRoof(Document doc, Level level2, List<Wall> walls)
+        {
+            RoofType roofType = new FilteredElementCollector(doc)
+                .OfClass(typeof(RoofType))
+                .OfType<RoofType>()
+                .Where(x => x.Name.Equals("Типовой - 400мм"))
+                .Where(x => x.FamilyName.Equals("Базовая крыша"))
+                .FirstOrDefault();
+
+            double wallWidth=walls[0].Width;
+            double dt = wallWidth / 2;
+            List <XYZ> points = new List<XYZ>();
+            points.Add(new XYZ(-dt, -dt, 0));
+            points.Add(new XYZ(dt, -dt, 0));
+            points.Add(new XYZ(dt, dt, 0));
+            points.Add(new XYZ(-dt, dt, 0));
+            points.Add(new XYZ(-dt, -dt, 0));
+
+            Transaction transaction = new Transaction(doc, "Построение крыши");
+            transaction.Start();
+
+            Application application = doc.Application;
+            CurveArray footprint = application.Create.NewCurveArray();
+            
+            for (int i = 0; i < 4; i++)
+            {
+                LocationCurve curve = walls[i].Location as LocationCurve;
+                XYZ p1 = curve.Curve.GetEndPoint(0);
+                XYZ p2 = curve.Curve.GetEndPoint(1);
+                Line line = Line.CreateBound(p1+points[i], p2+points[i+1]);
+                footprint.Append(line);
+            }
+            ModelCurveArray footPrintToModelCurveMapping = new ModelCurveArray();
+            FootPrintRoof footprintRoof = doc.Create.NewFootPrintRoof(footprint, level2, roofType, out footPrintToModelCurveMapping);
+
+            //ModelCurveArrayIterator iterator = footPrintToModelCurveMapping.ForwardIterator();
+            //iterator.Reset();
+            //while(iterator.MoveNext())
+            //{
+            //    ModelCurve modelCurve = iterator.Current as ModelCurve;
+            //    footprintRoof.set_DefinesSlope(modelCurve, true);
+            //    footprintRoof.set_SlopeAngle(modelCurve, 0.5);
+            //}
+            foreach (ModelCurve m in footPrintToModelCurveMapping)
+            {
+                footprintRoof.set_DefinesSlope(m, true);
+                footprintRoof.set_SlopeAngle(m, 0.5); 
+            }
+
+            transaction.Commit();
         }
 
         private static List<FamilyInstance> AddWindows(Document doc, Level level1, List<Wall> walls)
@@ -34,7 +91,9 @@ namespace CreationModelPlugin
                 .Where(x => x.Name.Equals("0915 x 1830 мм"))
                 .Where(x => x.FamilyName.Equals("Фиксированные"))
                 .FirstOrDefault();
+
             List<FamilyInstance> windows = new List<FamilyInstance>();
+
             Transaction transaction = new Transaction(doc, "Построение окон");
             transaction.Start();
             for (int i = 1; i < walls.Count; i++)
@@ -49,6 +108,7 @@ namespace CreationModelPlugin
                     windowType.Activate();
                 FamilyInstance window = doc.Create.NewFamilyInstance(point, windowType, wall, level1, StructuralType.NonStructural);
                 windows.Add(window);
+
                 window.get_Parameter(BuiltInParameter.INSTANCE_SILL_HEIGHT_PARAM).Set(UnitUtils.ConvertToInternalUnits(915, UnitTypeId.Millimeters));
             }
             transaction.Commit();
@@ -99,6 +159,7 @@ namespace CreationModelPlugin
             XYZ point1 = hostCurve.Curve.GetEndPoint(0);
             XYZ point2 = hostCurve.Curve.GetEndPoint(1);
             XYZ point = (point1 + point2) / 2;
+
             Transaction transaction = new Transaction(doc, "Построение дверей");
             transaction.Start();
             if (!doorType.IsActive)
@@ -117,6 +178,7 @@ namespace CreationModelPlugin
             level1 = listLevel
                 .Where(x => x.Name.Equals("Уровень 1"))
                 .FirstOrDefault();
+
             level2 = listLevel
                 .Where(x => x.Name.Equals("Уровень 2"))
                 .FirstOrDefault();
