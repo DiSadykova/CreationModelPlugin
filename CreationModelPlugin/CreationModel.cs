@@ -35,51 +35,66 @@ namespace CreationModelPlugin
             RoofType roofType = new FilteredElementCollector(doc)
                 .OfClass(typeof(RoofType))
                 .OfType<RoofType>()
-                .Where(x => x.Name.Equals("Типовой - 400мм"))
-                .Where(x => x.FamilyName.Equals("Базовая крыша"))
+                .Where(n => n.Name.Equals("Типовой - 125мм"))
+                .Where(n => n.FamilyName.Equals("Базовая крыша"))
                 .FirstOrDefault();
 
-            double wallWidth=walls[0].Width;
+            //вычисление координат основы стены для построения рабочей плоскости и профиля крыши
+            double wallWidth = walls[0].Width;
             double dt = wallWidth / 2;
-            List <XYZ> points = new List<XYZ>();
+            List<XYZ> points = new List<XYZ>();
             points.Add(new XYZ(-dt, -dt, 0));
             points.Add(new XYZ(dt, -dt, 0));
             points.Add(new XYZ(dt, dt, 0));
-            points.Add(new XYZ(-dt, dt, 0));
-            points.Add(new XYZ(-dt, -dt, 0));
-
-            Transaction transaction = new Transaction(doc, "Построение крыши");
-            transaction.Start();
+            //points.Add(new XYZ(-dt, dt, 0));
+            //points.Add(new XYZ(-dt, -dt, 0));
 
             Application application = doc.Application;
             CurveArray footprint = application.Create.NewCurveArray();
+           
+            LocationCurve curve = walls[1].Location as LocationCurve;
+            XYZ p1 = curve.Curve.GetEndPoint(0);
+            XYZ p2 = curve.Curve.GetEndPoint(1);
+
+            //вычисление смещений для точек профиля стены относительно высоты стен 
+            XYZ offsetTopPoint= new XYZ(0, 0, UnitUtils.ConvertToInternalUnits(2000, UnitTypeId.Millimeters));
+            XYZ offsetWallHeight = new XYZ(0, 0, level2.get_Parameter(BuiltInParameter.LEVEL_ELEV).AsDouble());
+
+           
+            //построение точек профиля крыши
+            XYZ point1 = p1 + points[1]+ offsetWallHeight;
+            XYZ point2= ((p2 + points[2]) + (p1 + points[1])) / 2 + offsetTopPoint+ offsetWallHeight;
+            XYZ point3 = p2 + points[2]+ offsetWallHeight;
             
-            for (int i = 0; i < 4; i++)
-            {
-                LocationCurve curve = walls[i].Location as LocationCurve;
-                XYZ p1 = curve.Curve.GetEndPoint(0);
-                XYZ p2 = curve.Curve.GetEndPoint(1);
-                Line line = Line.CreateBound(p1+points[i], p2+points[i+1]);
-                footprint.Append(line);
-            }
-            ModelCurveArray footPrintToModelCurveMapping = new ModelCurveArray();
-            FootPrintRoof footprintRoof = doc.Create.NewFootPrintRoof(footprint, level2, roofType, out footPrintToModelCurveMapping);
+            //вычисление смещения профиля с учетом переменной толщины крыши
+            double b = Math.Abs(point2.Y - point1.Y);
+            double a = offsetTopPoint.Z;
+            double BC = Math.Acos(b / Math.Sqrt(Math.Pow(a, 2) + Math.Pow(b, 2)))*180/Math.PI;
+            double x = roofType.get_Parameter(BuiltInParameter.ROOF_ATTR_DEFAULT_THICKNESS_PARAM).AsDouble()/(Math.Sin((90-BC)*Math.PI/180));
+            XYZ offsetRoof = new XYZ(0, 0, x);
 
-            //ModelCurveArrayIterator iterator = footPrintToModelCurveMapping.ForwardIterator();
-            //iterator.Reset();
-            //while(iterator.MoveNext())
-            //{
-            //    ModelCurve modelCurve = iterator.Current as ModelCurve;
-            //    footprintRoof.set_DefinesSlope(modelCurve, true);
-            //    footprintRoof.set_SlopeAngle(modelCurve, 0.5);
-            //}
-            foreach (ModelCurve m in footPrintToModelCurveMapping)
-            {
-                footprintRoof.set_DefinesSlope(m, true);
-                footprintRoof.set_SlopeAngle(m, 0.5); 
-            }
+            point1 += offsetRoof;
+            point2 += offsetRoof;
+            point3 += offsetRoof;
 
+            Line line1 = Line.CreateBound(point1, point2);
+            footprint.Append(line1);
+            Line line2 = Line.CreateBound(point2, point3);
+            footprint.Append(line2);
+
+
+            Transaction transaction = new Transaction(doc, "Построение крыши");
+            transaction.Start();
+            XYZ bubbleEnd = point1 + offsetTopPoint;
+            XYZ freeEnd = point1;
+            XYZ ThirdPt = point3;
+            ReferencePlane plane = doc.Create.NewReferencePlane2(bubbleEnd, freeEnd, ThirdPt, doc.ActiveView);
+
+            doc.Create.NewExtrusionRoof(footprint, plane, level2, roofType, 0, -(walls[0].get_Parameter(BuiltInParameter.CURVE_ELEM_LENGTH).AsDouble()+wallWidth));
             transaction.Commit();
+            
+
+
         }
 
         private static List<FamilyInstance> AddWindows(Document doc, Level level1, List<Wall> walls)
